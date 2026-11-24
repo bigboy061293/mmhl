@@ -1,0 +1,57 @@
+#!/bin/bash
+# Pin each MM8108 dongle's interface name to the USB port it is plugged into.
+#
+# Lists every network interface bound to the morse_usb driver, sorts them by
+# USB port path, and names them ${IF_PREFIX}0..3 in that order. Writes
+# /etc/udev/rules.d/70-mimohl-halow.rules. After a reboot (or replug) the
+# names stick to the physical ports, so label each port with its antenna.
+#
+#   mimohl-map-ports          show the current mapping and write rules
+#   mimohl-map-ports --show   only show
+set -euo pipefail
+CONF=/etc/mimohl/mimohl.conf
+RULES=/etc/udev/rules.d/70-mimohl-halow.rules
+IF_PREFIX=hl
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+rows=()
+for n in /sys/class/net/*; do
+	dev="$(readlink -f "$n/device" 2>/dev/null)" || continue
+	drv="$(basename "$(readlink -f "$dev/driver" 2>/dev/null)" 2>/dev/null)" || continue
+	[ "$drv" = morse_usb ] || continue
+	intf="$(basename "$dev")"          # e.g. 1-1.3:1.0  (USB interface)
+	udev_dir="$(dirname "$dev")"       # e.g. .../1-1.3  (USB device)
+	speed="$(cat "$udev_dir/speed" 2>/dev/null || echo ?)"
+	maxpwr="$(cat "$udev_dir/bMaxPower" 2>/dev/null || echo ?)"
+	rows+=("$intf $(basename "$n") $(cat "$n/address") ${speed}Mb/s $maxpwr")
+done
+
+if [ "${#rows[@]}" -eq 0 ]; then
+	echo "No morse_usb interfaces found. Is the driver loaded?  lsmod | grep morse; dmesg | grep -i morse" >&2
+	exit 1
+fi
+
+mapfile -t rows < <(printf '%s\n' "${rows[@]}" | sort -V)
+printf '%-6s %-12s %-10s %-18s %-9s %s\n' NEW USB_PORT CURRENT MAC SPEED DECLARED_POWER
+i=0
+for r in "${rows[@]}"; do
+	read -r intf cur mac speed pwr <<<"$r"
+	printf '%-6s %-12s %-10s %-18s %-9s %s\n' "${IF_PREFIX}$i" "$intf" "$cur" "$mac" "$speed" "$pwr"
+	i=$((i + 1))
+done
+[ "${#rows[@]}" -eq 4 ] || echo "WARNING: expected 4 dongles, found ${#rows[@]}" >&2
+[ "${1:-}" = --show ] && exit 0
+
+{
+	echo "# Written by mimohl-map-ports on $(date -Iseconds). Re-run after moving dongles."
+	echo "# Match on the USB interface path (= physical port), never on MAC: dongles"
+	echo "# without an OTP MAC get a random one every boot."
+	i=0
+	for r in "${rows[@]}"; do
+		read -r intf _ <<<"$r"
+		echo "SUBSYSTEM==\"net\", ACTION==\"add\", DRIVERS==\"morse_usb\", KERNELS==\"$intf\", NAME=\"${IF_PREFIX}$i\", ENV{NM_UNMANAGED}=\"1\", TAG+=\"systemd\", ENV{SYSTEMD_WANTS}+=\"mimohl-radio@${IF_PREFIX}$i.service\""
+		i=$((i + 1))
+	done
+} > "$RULES"
+echo "Wrote $RULES. Reboot (or unplug/replug all dongles) to apply."
