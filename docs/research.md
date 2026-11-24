@@ -136,7 +136,36 @@ Primary channel width: 1 MHz for the 1 MHz radio, 2 MHz for the wider
 ones. A 1 MHz primary on the wide channels would make beacons and
 control frames more robust at range; worth testing. [guess]
 
-## 6. Open questions to settle on hardware
+## 6. Vantron VT-USB-AH-8108 source package (V1.15.3, 2025-07-14)
+
+Vu's dongles are Vantron VT-USB-AH-8108. Their Linux package was checked
+against the public release used here:
+
+- It ships Morse driver **rel_1_15_3** (Apr 2025), firmware `mm8108b2-rl.bin`,
+  BCF `bcf_mf15457.bin` (the dongle uses Morse's MF15457 "Etna" module), and
+  matching hostapd/wpa_supplicant/morse_cli/morsectrl. [verified]
+- Same USB ID 325b:8100. [verified]
+- It needs **Morse's kernel patches** applied to mac80211/cfg80211 (for
+  example `IEEE80211_CHAN_IGNORE`, 8 MHz channel flags) and lists kernels only
+  up to **6.6.x**. Cross-compiling it against the Pi kernels fails:
+  rpi-6.12.y (CHAN_IGNORE missing, S1G API changes) and rpi-6.18.y (also timer
+  API changes). [verified]
+- It has **both multi-dongle bugs** from section 3 (`/dev/morse_io` + global
+  uaccess pointer in `usb.c`, global `beacon_irqs_enabled`). Our beacon patch
+  applies to it with offsets. [verified]
+- The public mm8108-2.2.3 BCF table maps OTP board types 0804 and 0807 to
+  `bcf_mf15457.bin`, so the newer stack should pick the right BCF for this
+  dongle by itself. [guess until a dongle is plugged in]
+
+Conclusion: use the public mm8108-2.2.3 stack (this repo) with the Vantron
+hardware. The firmware is loaded by the host, so the dongle runs whatever
+release the driver brings. Keep driver, firmware and BCF from the **same**
+release. Do not mix Vantron's 1.15.3 BCF with the 2.2.3 driver.
+Fallback if vendor support requires 1.15.3: a custom Pi kernel from
+`rpi-6.6.y` + Morse's 6.6.x patches, driver built with
+`CONFIG_MORSE_USER_ACCESS` off + our beacon patch. [untested]
+
+## 7. Open questions to settle on hardware
 
 - Which dongle model is in use, and does its OTP carry a board id and a MAC?
   (`dmesg | grep -iE 'bcf|mac address|board'`)
