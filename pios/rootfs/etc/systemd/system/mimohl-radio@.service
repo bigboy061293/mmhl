@@ -1,0 +1,14 @@
+[Unit]
+Description=Mimohl HaLow radio %i (hostapd_s1g or wpa_supplicant_s1g, per /etc/mimohl/mimohl.conf)
+# Started by udev when the interface appears; stopped when the dongle goes away.
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/mimohl-radio-run %i
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

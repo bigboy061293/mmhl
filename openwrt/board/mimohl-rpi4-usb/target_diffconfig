@@ -1,0 +1,35 @@
+# Mimohl: Raspberry Pi 4 + four MM8108 USB dongles, vendor "morse" driver.
+# Copied into boards/mimohl-rpi4-usb/ of Morse Micro's OpenWrt fork by openwrt/build.sh.
+# This file is appended LAST by morse_setup.sh, so it overrides boards/common.
+CONFIG_TARGET_MULTI_PROFILE=y
+CONFIG_TARGET_bcm27xx=y
+CONFIG_TARGET_bcm27xx_bcm2711=y
+CONFIG_TARGET_DEVICE_bcm27xx_bcm2711_DEVICE_rpi-4=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=300
+CONFIG_PACKAGE_persistent-vars-storage-bcm2711=y
+CONFIG_PACKAGE_kmod-of-mdio=y
+
+# Vendor driver (same code as the Pi OS path), USB bus on.
+CONFIG_PACKAGE_kmod-morse=y
+CONFIG_MORSE_USB=y
+# Not needed for SDIO-less USB boards:
+# CONFIG_MORSE_SDIO is not set
+# common/morse_diffconfig turns this on. It breaks the 2nd..4th dongle
+# (fixed /dev/morse_io name + "morse" class per probe), so force it off.
+# CONFIG_MORSE_USER_ACCESS is not set
+CONFIG_MORSE_VENDOR_COMMAND=y
+# Upstream-style mm81x driver: leave out so only one driver binds the dongles.
+# CONFIG_PACKAGE_kmod-mm81x is not set
+CONFIG_PACKAGE_morse-fw-8108=y
+CONFIG_PACKAGE_morse-board-config=y
+CONFIG_PACKAGE_morsecli=y
+CONFIG_PACKAGE_hostapd_s1g=y
+CONFIG_PACKAGE_wpa_supplicant_s1g=y
+CONFIG_PACKAGE_netifd-morse=y
+
+# USB host bits and handy tools
+CONFIG_PACKAGE_kmod-usb-core=y
+CONFIG_PACKAGE_usbutils=y
+CONFIG_PACKAGE_iw=y
+CONFIG_PACKAGE_iperf3=y
+CONFIG_PACKAGE_tcpdump=y
