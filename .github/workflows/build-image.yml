@@ -1,0 +1,86 @@
+# Build the Mimohl Raspberry Pi OS image (pi-gen, arm64, Trixie) and publish it
+# as a downloadable workflow artifact.
+#
+# Run it from the Actions tab ("Build Pi image" > Run workflow), or it runs on
+# PRs that touch the image inputs.
+#
+# Login: user "pi". Password = repo secret MIMOHL_PASS if set; otherwise a random
+# one is generated and shipped inside the artifact as credentials.txt (the
+# artifact is only visible to people with access to this repo).
+name: Build Pi image
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "pios/**"
+      - "patches/**"
+      - "config/**"
+      - "versions.env"
+      - ".github/workflows/build-image.yml"
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space (pi-gen needs ~15 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af >/dev/null
+          df -h /
+
+      - name: Enable arm64 emulation
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static binfmt-support
+          ls /proc/sys/fs/binfmt_misc/ | grep aarch64
+
+      - name: Pick login password
+        id: pass
+        env:
+          SECRET_PASS: ${{ secrets.MIMOHL_PASS }}
+        run: |
+          if [ -n "$SECRET_PASS" ]; then
+            echo "source=secret" >> "$GITHUB_OUTPUT"
+            PASS="$SECRET_PASS"
+          else
+            echo "source=random" >> "$GITHUB_OUTPUT"
+            PASS="$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)"
+          fi
+          echo "::add-mask::$PASS"
+          echo "MIMOHL_PASS=$PASS" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: ./pios/build-image.sh
+
+      - name: Collect output
+        run: |
+          mkdir -p out
+          cp work/pi-gen/deploy/*.img.xz out/
+          ( cd out && sha256sum *.img.xz > SHA256SUMS )
+          cp work/pi-gen/deploy/*.info out/ 2>/dev/null || true
+          {
+            echo "Mimohl Pi image built from ${GITHUB_SHA} on $(date -u +%F)"
+            echo "SSH: ssh pi@mimohl.local"
+            if [ "${{ steps.pass.outputs.source }}" = random ]; then
+              echo "user: pi   password: ${MIMOHL_PASS}"
+              echo "Change it after first login with: passwd"
+            else
+              echo "user: pi   password: the MIMOHL_PASS repo secret"
+            fi
+          } > out/credentials.txt
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mimohl-pi4-image
+          path: out/
+          compression-level: 0
+          retention-days: 30
