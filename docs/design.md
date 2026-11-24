@@ -32,10 +32,10 @@ four links and needs no failover logic of its own.
   │          │               │                   │          ▲               │
   │   linkd: picks endpoint  │                   │  (no logic: WireGuard    │
   │          │               │                   │   replies to last source)│
-  │  wlan0 1 MHz  902.5 ─────┼── ant A ··· ant A'┼───── wlan0  STA ↔ AP     │
-  │  wlan1 2 MHz  907   ─────┼── ant B ··· ant B'┼───── wlan1               │
-  │  wlan2 4 MHz  914   ─────┼── ant C ··· ant C'┼───── wlan2               │
-  │  wlan3 8 MHz  924   ─────┼── ant D ··· ant D'┼───── wlan3               │
+  │  hl0   8 MHz  924   ─────┼── ant A ··· ant A'┼───── hl0    STA ↔ AP     │
+  │  hl1   4 MHz  914   ─────┼── ant B ··· ant B'┼───── hl1                 │
+  │  hl2   2 MHz  907   ─────┼── ant C ··· ant C'┼───── hl2                 │
+  │  hl3   1 MHz  902.5 ─────┼── ant D ··· ant D'┼───── hl3                 │
   └──────────────────────────┘                   └──────────────────────────┘
          one link active (carries wg0), three standby (associated, probed)
 ```
@@ -57,10 +57,10 @@ Morse Micro's driver for `country=US`.
 
 | Radio | Bandwidth | Centre | S1G ch. | Occupies | Role |
 |---|---|---|---|---|---|
-| wlan3 | 8 MHz | 924 MHz | 44 | 920 – 928 | Primary (most capacity) |
-| wlan2 | 4 MHz | 914 MHz | 24 | 912 – 916 | First backup |
-| wlan1 | 2 MHz | 907 MHz | 10 | 906 – 908 | Second backup |
-| wlan0 | 1 MHz | 902.5 MHz | 1 | 902 – 903 | Lifeline (see 3.3) |
+| hl0 | 8 MHz | 924 MHz | 44 | 920 – 928 | Primary (most capacity) |
+| hl1 | 4 MHz | 914 MHz | 24 | 912 – 916 | First backup |
+| hl2 | 2 MHz | 907 MHz | 10 | 906 – 908 | Second backup |
+| hl3 | 1 MHz | 902.5 MHz | 1 | 902 – 903 | Lifeline (see 3.3) |
 
 This is the example set from the original brief, with bandwidths assigned so
 every channel lands on a valid centre and none overlap. Gaps between channels
@@ -151,9 +151,10 @@ This is measured explicitly in test phase 3.
   few hundred mA. Four of them plus peaks can brown out. Plan on a **powered
   USB hub** (or a hub with a separate supply) from the start.
 - **Stable names.** USB enumeration order can change between boots. Bind each
-  radio to its channel by USB port path or MAC address with udev rules
-  (`wlan-hl1`, `wlan-hl2`, ... rather than `wlan0..3`) so a reboot never puts
-  the 8 MHz config on the 1 MHz antenna.
+  radio to its channel by USB port path (not MAC: dongles without a MAC in
+  OTP get a random one each boot). The bring-up build does this with
+  `mimohl-map-ports`, naming radios `hl0`..`hl3`, so a reboot never puts the
+  8 MHz config on the 1 MHz antenna.
 - **Antenna cabling.** Label each dongle, cable and antenna as a set. The
   config file maps name → port path → channel → antenna.
 
@@ -172,11 +173,14 @@ exact names and layout, to confirm during bring-up:
 | Userspace | Morse's S1G-aware `hostapd` and `wpa_supplicant` builds | Stock hostapd does not know S1G channels. |
 | Tools | `morse_cli` | Per-device stats, channel info, firmware version. Also standard `iw`. |
 
-**Multiple devices.** The critical bring-up question is whether one driver
-instance handles four MM8108 USB devices at once, each with its own channel
-and bandwidth. **⚠ Guess:** mac80211 drivers normally support several
-devices, but vendor drivers sometimes keep global state (for example one
-firmware load path or one country setting). Test phase 2 answers this first.
+**Multiple devices.** One `morse.ko` drives every dongle, each with its own
+wiphy and netdev, but some state is shared. From a code read of the driver
+(details in [research.md section 3](research.md)): `CONFIG_MORSE_USER_ACCESS`
+must be off or only the first dongle probes, a module-wide beacon IRQ mask
+needs the patch in `patches/morse_driver/`, and module parameters (country,
+`bcf`, MAC options) apply to all four dongles. The bring-up build handles all
+three. This is still code-read, not tested on hardware; test phase 2
+confirms it.
 
 ### 5.2 Operating system
 
@@ -308,19 +312,19 @@ the detection time plus about one RTT.
 
 ```yaml
 links:
-  - name: hl8
+  - name: hl0
     usb_path: "1-1.4:1.0"      # from udev
     channel_mhz: 924
     bw_mhz: 8
     far_ip: 10.10.4.1
     priority: 1
-  - name: hl4
+  - name: hl1
     usb_path: "1-1.3:1.0"
     channel_mhz: 914
     bw_mhz: 4
     far_ip: 10.10.3.1
     priority: 2
-  # hl2, hl1 ...
+  # hl2, hl3 ...
 thresholds:
   floor_mbps: 1.5
   loss_degraded: 0.10
@@ -359,7 +363,7 @@ during the switch, throughput before, during and after, and the reason
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Driver cannot run four USB devices at once | Blocks the design on one Pi | Phase 2 first. Fallback: two Pis with two radios each, or SDIO/SPI modules if available |
+| Driver cannot run four USB devices at once | Blocks the design on one Pi | Known blockers found and handled by code read (section 5.1); phase 2 confirms on hardware. Fallback: two Pis with two radios each, or SDIO/SPI modules if available |
 | USB power brown-outs | Random disconnects that look like jamming | Powered hub from day one; watch `get_throttled` |
 | Standby noise readings polluted by own TX | False failovers | Rely on probe loss; mitigations in 3.4 |
 | 1 MHz link below floor | Last backup does not meet 1.5 Mbps | Treat as lifeline, or replace with a second 2 MHz channel (Q1) |

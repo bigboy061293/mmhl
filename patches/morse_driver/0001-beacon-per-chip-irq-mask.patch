@@ -1,0 +1,63 @@
+From: Mimohl project
+Subject: [PATCH] morse: keep beacon IRQ mask per chip, not module-wide
+
+beacon_irqs_enabled was a single static bitmask shared by every chip the
+module drives. Bit N means "vif id N on this chip has beacon IRQs on".
+With several MM8108 dongles running AP interfaces, they all use vif id 0,
+so bringing one AP down clears bit 0 and silently masks beacon IRQs on
+the other chips (their beacons stop). Store the mask in struct morse.
+
+Found by code reading for the Mimohl 4-dongle setup; not yet confirmed
+on hardware.
+
+diff --git a/beacon.c b/beacon.c
+index 21be35c..4bf19d7 100644
+--- a/beacon.c
++++ b/beacon.c
+@@ -42,7 +42,6 @@ module_param(enable_short_bcn_as_dtim_override, int, 0644);
+ MODULE_PARM_DESC(enable_short_bcn_as_dtim_override,
+ 		 "Override enable for short beacon to be the DTIM beacon (experimental)");
+ 
+-static unsigned long beacon_irqs_enabled;
+ static bool enable_short_bcn_as_dtim;
+ 
+ enum morse_mac_rsn_beacon_mode morse_beacon_get_rsn_mode(void)
+@@ -542,7 +541,7 @@ void morse_beacon_irq_handle(struct morse *mors, u32 status)
+ 	int count, masked_status;
+ 
+ 	count = 0;
+-	masked_status = (status & beacon_irqs_enabled) >> MORSE_INT_BEACON_BASE_NUM;
++	masked_status = (status & mors->beacon_irqs_enabled) >> MORSE_INT_BEACON_BASE_NUM;
+ 	spin_lock_bh(&mors->vif_list_lock);
+ 	while (masked_status && (count < mors->max_vifs)) {
+ 		if (masked_status & 1) {
+@@ -568,12 +567,12 @@ static int morse_beacon_irq_enable(struct morse_vif *mors_vif, bool enable)
+ 	}
+ 
+ 	if (enable)
+-		set_bit(beacon_irq_num, &beacon_irqs_enabled);
++		set_bit(beacon_irq_num, &mors->beacon_irqs_enabled);
+ 	else
+-		clear_bit(beacon_irq_num, &beacon_irqs_enabled);
++		clear_bit(beacon_irq_num, &mors->beacon_irqs_enabled);
+ 
+ 	MORSE_BEACON_DBG(mors, "%s: irq:%lx id:%d\n",
+-					__func__, beacon_irqs_enabled, mors_vif->id);
++					__func__, mors->beacon_irqs_enabled, mors_vif->id);
+ 
+ 	return morse_hw_irq_enable(mors, beacon_irq_num, enable);
+ }
+diff --git a/morse.h b/morse.h
+index 16842fe..9e0b009 100644
+--- a/morse.h
++++ b/morse.h
+@@ -1144,6 +1144,9 @@ struct morse_persistent_vif_configs {
+ struct morse {
+ 	u32 chip_id;
+ 
++	/** Per-chip mask of enabled beacon IRQs (was a module-wide global) */
++	unsigned long beacon_irqs_enabled;
++
+ 	/** Refer to enum morse_host_bus_type */
+ 	u32 bus_type;
+ 

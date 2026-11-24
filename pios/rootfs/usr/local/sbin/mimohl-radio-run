@@ -1,0 +1,79 @@
+#!/bin/bash
+# mimohl-radio-run <ifname>
+# Generate the hostapd_s1g / wpa_supplicant_s1g config for one radio from
+# /etc/mimohl/mimohl.conf and exec the daemon. Called by mimohl-radio@.service.
+set -euo pipefail
+IF="$1"
+CONF=/etc/mimohl/mimohl.conf
+RUN=/run/mimohl
+# shellcheck disable=SC1090
+. "$CONF"
+IF_PREFIX="${IF_PREFIX:-hl}"
+if [ "${PASSPHRASE:-change-me-please}" = change-me-please ]; then
+	echo "Set PASSPHRASE in $CONF before starting radios" >&2; exit 1
+fi
+
+idx="${IF#"$IF_PREFIX"}"
+case "$idx" in [0-3]) ;; *) echo "$IF is not ${IF_PREFIX}0..3" >&2; exit 1 ;; esac
+plan_var="RADIO$idx"
+read -r BW CH <<<"${!plan_var}"
+
+# US global operating classes (IEEE 802.11 Table E-4, as used by Morse hostapd):
+case "$BW" in
+	1) OPCLASS=68; PRIM=0 ;;   # 1 MHz primary
+	2) OPCLASS=69; PRIM=1 ;;
+	4) OPCLASS=70; PRIM=1 ;;   # 2 MHz primary inside a 4 MHz channel  [guess: tune later]
+	8) OPCLASS=71; PRIM=1 ;;
+	*) echo "bad bandwidth $BW for $IF" >&2; exit 1 ;;
+esac
+[ "$COUNTRY" = US ] || echo "WARNING: op_class table above is for US; check docs/research.md for $COUNTRY" >&2
+
+SSID="${SSID_BASE}-$idx"
+mkdir -p "$RUN"; chmod 700 "$RUN"
+ip link set "$IF" up || true
+
+if [ "$ROLE" = ap ]; then
+	cfg="$RUN/hostapd-$IF.conf"
+	cat > "$cfg" <<EOC
+interface=$IF
+driver=nl80211
+ctrl_interface=/run/hostapd_s1g
+ctrl_interface_group=0
+logger_stdout=-1
+logger_stdout_level=2
+country_code=$COUNTRY
+hw_mode=a
+ieee80211ah=1
+channel=$CH
+op_class=$OPCLASS
+s1g_prim_chwidth=$PRIM
+s1g_prim_1mhz_chan_index=0
+s1g_capab=[SHORT-GI-ALL]
+ssid=$SSID
+beacon_int=100
+dtim_period=1
+wmm_enabled=1
+auth_algs=1
+wpa=2
+wpa_key_mgmt=SAE
+rsn_pairwise=CCMP
+ieee80211w=2
+sae_password=$PASSPHRASE
+EOC
+	exec /usr/local/sbin/hostapd_s1g "$cfg"
+elif [ "$ROLE" = sta ]; then
+	cfg="$RUN/wpa-$IF.conf"
+	cat > "$cfg" <<EOC
+ctrl_interface=/run/wpa_supplicant_s1g
+country=$COUNTRY
+network={
+	ssid="$SSID"
+	key_mgmt=SAE
+	sae_password="$PASSPHRASE"
+	ieee80211w=2
+}
+EOC
+	exec /usr/local/sbin/wpa_supplicant_s1g -D nl80211 -i "$IF" -c "$cfg"
+else
+	echo "ROLE must be ap or sta" >&2; exit 1
+fi

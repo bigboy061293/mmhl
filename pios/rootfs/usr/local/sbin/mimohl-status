@@ -1,0 +1,27 @@
+#!/bin/bash
+# One-screen health view of every HaLow radio. Run as root.
+CONF=/etc/mimohl/mimohl.conf
+IF_PREFIX=hl
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+echo "== driver"; lsmod | grep -E '^morse ' || echo "morse.ko NOT loaded"
+echo "== USB (Morse VID 325b)"; lsusb -d 325b: 2>/dev/null || true
+echo "== power: Pi 4 gives at most 1.2 A total to all USB ports"
+vcgencmd get_throttled 2>/dev/null || true
+
+for i in 0 1 2 3; do
+	IF="${IF_PREFIX}$i"
+	echo; echo "==== $IF"
+	if [ ! -e "/sys/class/net/$IF" ]; then echo "missing (dongle unplugged, failed probe, or ports not mapped)"; continue; fi
+	echo "port: $(basename "$(readlink -f /sys/class/net/$IF/device)")  mac: $(cat /sys/class/net/$IF/address)  state: $(cat /sys/class/net/$IF/operstate)"
+	systemctl is-active --quiet "mimohl-radio@$IF" && echo "service: active" || echo "service: NOT active (journalctl -u mimohl-radio@$IF)"
+	iw dev "$IF" info 2>/dev/null | grep -E 'type|channel|txpower' | sed 's/^\s*/  /'
+	iw dev "$IF" survey dump 2>/dev/null | grep -B1 -A2 'in use' | sed 's/^\s*/  /'
+	if [ "$ROLE" = ap ]; then
+		hostapd_cli_s1g -p /run/hostapd_s1g -i "$IF" all_sta 2>/dev/null | grep -E '^[0-9a-f]{2}:|signal|rx_rate|tx_rate' | sed 's/^/  /'
+	else
+		wpa_cli_s1g -p /run/wpa_supplicant_s1g -i "$IF" status 2>/dev/null | grep -E 'wpa_state|ssid=|freq' | sed 's/^/  /'
+		iw dev "$IF" link 2>/dev/null | grep -E 'signal|bitrate' | sed 's/^\s*/  /'
+	fi
+done
